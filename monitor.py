@@ -359,6 +359,39 @@ async def handle_signals(symbol: str, signals: List[dict], price: float, now: da
     await send_telegram_alert(msg)
 
 
+async def fetch_klines(symbol: str, interval: str, limit: int = 60) -> Optional[List[dict]]:
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, proxy=PROXY_URL, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data
+                logger.error(f"Failed to fetch {interval} klines: {response.status}")
+    except Exception as e:
+        logger.error(f"Error fetching klines: {e}")
+    return None
+
+
+async def preload_historical_data(symbol: str, tf: str, tf_data: TimeframeData, limit: int = 60):
+    klines = await fetch_klines(symbol, tf, limit)
+    if klines:
+        for k in klines:
+            close = float(k[4])
+            volume = float(k[5])
+            high = float(k[2])
+            low = float(k[3])
+            open_price = float(k[1])
+            tf_data.closes.append(close)
+            tf_data.volumes.append(volume)
+            tf_data.highs.append(high)
+            tf_data.lows.append(low)
+            tf_data.returns.append((close - open_price) / open_price if open_price else 0)
+        logger.info(f"Preloaded {len(klines)} {tf} klines for {symbol}")
+    else:
+        logger.warning(f"Could not preload {tf} data for {symbol}, will accumulate from scratch")
+
+
 async def monitor_prices():
     if not TIMEFRAMES:
         logger.error("No timeframes enabled!")
@@ -375,6 +408,13 @@ async def monitor_prices():
     monitors: Dict[str, MultiTimeframeMonitor] = {
         sym: MultiTimeframeMonitor(sym) for sym in MONITOR_SYMBOLS
     }
+
+    logger.info("Preloading historical data...")
+    for sym in MONITOR_SYMBOLS:
+        for tf in TIMEFRAMES:
+            config = TIMEFRAME_CONFIG.get(tf, {"history": 60})
+            await preload_historical_data(sym, tf, monitors[sym].timeframes[tf], config["history"])
+    logger.info("Historical data preloaded, connecting to WebSocket...")
 
     while True:
         try:
