@@ -1,6 +1,7 @@
-from flask import Flask, render_template, jsonify, Response
+from flask import Flask, render_template, Response
 import threading
 import time
+import json
 
 app = Flask(__name__)
 
@@ -36,7 +37,11 @@ def index():
 @app.route("/api/status")
 def get_status():
     with state_lock:
-        return jsonify(shared_state.copy())
+        return app.response_class(
+            response=json.dumps(shared_state.copy()),
+            status=200,
+            mimetype="application/json"
+        )
 
 
 @app.route("/api/stream")
@@ -48,7 +53,7 @@ def stream():
                 current_update = shared_state["last_update"]
                 if current_update != last_update:
                     last_update = current_update
-                    data = jsonify(shared_state.copy()).get_data(as_text=True)
+                    data = json.dumps(shared_state.copy())
                     yield f"data: {data}\n\n"
             time.sleep(1)
 
