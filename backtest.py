@@ -246,18 +246,29 @@ class Backtester:
             signal_type = None
             reason = ""
 
-            if rsi <= RSI_OVERSOLD and vol_ratio >= 1.5 and is_green:
+            macd_ok_for_buy = True
+            macd_ok_for_sell = True
+            stop_loss_triggered = False
+            if self.position > 0 and position_entry_price > 0:
+                loss_pct = (current_price - position_entry_price) / position_entry_price
+                if loss_pct <= -0.03:
+                    stop_loss_triggered = True
+
+            if stop_loss_triggered:
+                signal_type = "SELL"
+                reason = "止损(-3%)"
+            elif bb_lower and current_price <= bb_lower and rsi <= 45:
+                signal_type = "BUY"
+                reason = f"布林下轨+RSI({rsi:.1f})"
+            elif bb_upper and current_price >= bb_upper and rsi >= 55:
+                signal_type = "SELL"
+                reason = f"布林上轨+RSI({rsi:.1f})"
+            elif rsi <= RSI_OVERSOLD and vol_ratio >= 1.5 and is_green:
                 signal_type = "BUY"
                 reason = f"RSI超卖({rsi:.1f})+放量({vol_ratio:.1f}x)+阳线"
             elif rsi >= RSI_OVERBOUGHT and vol_ratio >= 1.5 and not is_green:
                 signal_type = "SELL"
                 reason = f"RSI超买({rsi:.1f})+放量({vol_ratio:.1f}x)+阴线"
-            elif bb_upper and current_price >= bb_upper and rsi >= 55:
-                signal_type = "SELL"
-                reason = f"布林上轨({bb_upper:.0f})+RSI({rsi:.1f})"
-            elif bb_lower and current_price <= bb_lower and rsi <= 45:
-                signal_type = "BUY"
-                reason = f"布林下轨({bb_lower:.0f})+RSI({rsi:.1f})"
 
             if signal_type:
                 signals.append({
@@ -266,6 +277,7 @@ class Backtester:
                     "type": signal_type,
                     "reason": reason,
                     "rsi": rsi,
+                    "macd_hist": macd_hist,
                 })
         return signals
 
@@ -309,6 +321,24 @@ class Backtester:
                     "reason": sig["reason"],
                 })
                 self.position = 0
+
+            elif sig["type"] == "BUY" and self.position > 0:
+                loss_pct = (sig["price"] - position_entry_price) / position_entry_price
+                if loss_pct <= -0.03:
+                    proceeds = self.position * sig["price"] * (1 - FEE_RATE)
+                    net_pnl = proceeds - position_entry_cost
+                    self.capital += proceeds
+                    self.trades.append({
+                        "action": "SELL",
+                        "time": sig["time"],
+                        "price": sig["price"],
+                        "shares": self.position,
+                        "proceeds": proceeds,
+                        "cost": position_entry_cost,
+                        "pnl": net_pnl,
+                        "reason": "止损(-3%)",
+                    })
+                    self.position = 0
 
         if self.position > 0 and self.klines:
             final_price = self.klines[-1]["close"]
