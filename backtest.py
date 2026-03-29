@@ -89,17 +89,6 @@ def load_klines_from_db(symbol: str, interval: str, days: int = 90) -> Optional[
     ]
 
 
-def get_latest_timestamp(symbol: str, interval: str) -> Optional[int]:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT MAX(timestamp) FROM klines WHERE symbol = ? AND interval = ?
-    """, (symbol, interval))
-    result = cursor.fetchone()[0]
-    conn.close()
-    return result
-
-
 def calculate_rsi(prices: np.ndarray, period: int = 14) -> float:
     if len(prices) <= period:
         return 50.0
@@ -151,16 +140,6 @@ def calculate_bollinger_bands(prices: np.ndarray, period: int = 20, std_dev: flo
     sma = float(np.mean(recent))
     std = float(np.std(recent))
     return sma + std_dev * std, sma, sma - std_dev * std
-
-
-def calculate_atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> Optional[float]:
-    if len(highs) < period or len(lows) < period or len(closes) < period:
-        return None
-    tr = np.maximum(highs - lows,
-                    np.maximum(np.abs(highs - np.roll(closes, 1)),
-                               np.abs(lows - np.roll(closes, 1))))
-    tr[0] = highs[0] - lows[0]
-    return float(np.mean(tr))
 
 
 async def fetch_klines_from_api(symbol: str, interval: str, days: int = 90) -> Optional[List[Dict]]:
@@ -225,6 +204,8 @@ class Backtester:
         if not self.klines:
             return []
         signals = []
+        position_entry_price = 0
+
         for i, k in enumerate(self.klines):
             self.closes.append(k["close"])
             self.volumes.append(k["volume"])
@@ -232,13 +213,22 @@ class Backtester:
             self.lows.append(k["low"])
             if i < 60:
                 continue
+
             closes_arr = np.array(list(self.closes))
             highs_arr = np.array(list(self.highs))
             lows_arr = np.array(list(self.lows))
             volumes_arr = np.array(list(self.volumes))
+
             rsi = calculate_rsi(closes_arr, RSI_PERIOD)
             macd, macd_sig, macd_hist = calculate_macd(closes_arr, MACD_FAST, MACD_SLOW, MACD_SIGNAL)
             bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(closes_arr, BB_PERIOD, BB_STD)
+
+            ema_20 = calculate_ema(closes_arr, 20)[-1] if len(closes_arr) >= 20 else k["close"]
+            ema_50 = calculate_ema(closes_arr, 50)[-1] if len(closes_arr) >= 50 else k["close"]
+
+            is_uptrend = k["close"] > ema_20 and ema_20 > ema_50
+            is_downtrend = k["close"] < ema_20 and ema_20 < ema_50
+
             avg_vol = np.mean(volumes_arr[:-1]) if len(volumes_arr) > 1 else volumes_arr[-1]
             vol_ratio = k["volume"] / avg_vol if avg_vol > 0 else 1
             is_green = k["close"] > k["open"]
@@ -246,29 +236,34 @@ class Backtester:
             signal_type = None
             reason = ""
 
-            macd_ok_for_buy = True
-            macd_ok_for_sell = True
-            stop_loss_triggered = False
-            if self.position > 0 and position_entry_price > 0:
-                loss_pct = (current_price - position_entry_price) / position_entry_price
-                if loss_pct <= -0.03:
-                    stop_loss_triggered = True
+            if self.position == 0:
+                if rsi >= RSI_OVERBOUGHT and vol_ratio >= 1.2 and not is_green:
+                    signal_type = "SHORT"
+                    reason = f"做空: RSI({rsi:.1f})+量({vol_ratio:.1f}x)"
+                elif rsi <= RSI_OVERSOLD and vol_ratio >= 1.2 and is_green:
+                    signal_type = "BUY"
+                    reason = f"做多: RSI({rsi:.1f})+量({vol_ratio:.1f}x)"
 
-            if stop_loss_triggered:
-                signal_type = "SELL"
-                reason = "止损(-3%)"
-            elif bb_lower and current_price <= bb_lower and rsi <= 45:
-                signal_type = "BUY"
-                reason = f"布林下轨+RSI({rsi:.1f})"
-            elif bb_upper and current_price >= bb_upper and rsi >= 55:
-                signal_type = "SELL"
-                reason = f"布林上轨+RSI({rsi:.1f})"
-            elif rsi <= RSI_OVERSOLD and vol_ratio >= 1.5 and is_green:
-                signal_type = "BUY"
-                reason = f"RSI超卖({rsi:.1f})+放量({vol_ratio:.1f}x)+阳线"
-            elif rsi >= RSI_OVERBOUGHT and vol_ratio >= 1.5 and not is_green:
-                signal_type = "SELL"
-                reason = f"RSI超买({rsi:.1f})+放量({vol_ratio:.1f}x)+阴线"
+            elif self.position > 0:
+                loss_pct = (current_price - position_entry_price) / position_entry_price
+                if loss_pct <= -0.02:
+                    signal_type = "SELL"
+                    reason = "止损(-2%)"
+                elif is_green and vol_ratio >= 1.3 and rsi >= 55:
+                    signal_type = "SELL"
+                    reason = f"止盈: RSI({rsi:.1f})+量"
+
+            elif self.position < 0:
+                profit_pct = (position_entry_price - current_price) / position_entry_price
+                if profit_pct >= 0.02:
+                    signal_type = "COVER"
+                    reason = "止盈(+2%)"
+                elif profit_pct <= -0.02:
+                    signal_type = "COVER"
+                    reason = "止损(-2%)"
+                elif is_green and rsi <= 45:
+                    signal_type = "COVER"
+                    reason = "平空反手做多"
 
             if signal_type:
                 signals.append({
@@ -277,13 +272,19 @@ class Backtester:
                     "type": signal_type,
                     "reason": reason,
                     "rsi": rsi,
-                    "macd_hist": macd_hist,
+                    "trend": "up" if is_uptrend else ("down" if is_downtrend else "sideways"),
                 })
+                if signal_type == "BUY":
+                    position_entry_price = current_price
+                elif signal_type == "SHORT":
+                    position_entry_price = current_price
+
         return signals
 
     def run(self, signals: List[Dict]) -> Dict:
         if not signals:
             return self._empty_result()
+
         self.trades = []
         self.position = 0
         self.capital = self.initial_capital
@@ -299,62 +300,64 @@ class Backtester:
                 position_entry_cost = cost
                 self.capital -= cost
                 self.trades.append({
-                    "action": "BUY",
-                    "time": sig["time"],
-                    "price": sig["price"],
-                    "shares": shares,
-                    "cost": cost,
-                    "reason": sig["reason"],
+                    "action": "BUY", "time": sig["time"], "price": sig["price"],
+                    "shares": shares, "cost": cost, "reason": sig["reason"],
                 })
+
+            elif sig["type"] == "SHORT" and self.position == 0:
+                shares = self.capital / (sig["price"] * (1 + FEE_RATE))
+                proceeds = shares * sig["price"] * (1 - FEE_RATE)
+                self.position = -shares
+                position_entry_price = sig["price"]
+                position_entry_cost = proceeds
+                self.capital += proceeds
+                self.trades.append({
+                    "action": "SHORT", "time": sig["time"], "price": sig["price"],
+                    "shares": shares, "proceeds": proceeds, "reason": sig["reason"],
+                })
+
             elif sig["type"] == "SELL" and self.position > 0:
                 proceeds = self.position * sig["price"] * (1 - FEE_RATE)
                 net_pnl = proceeds - position_entry_cost
                 self.capital += proceeds
                 self.trades.append({
-                    "action": "SELL",
-                    "time": sig["time"],
-                    "price": sig["price"],
-                    "shares": self.position,
-                    "proceeds": proceeds,
-                    "cost": position_entry_cost,
-                    "pnl": net_pnl,
-                    "reason": sig["reason"],
+                    "action": "SELL", "time": sig["time"], "price": sig["price"],
+                    "shares": self.position, "proceeds": proceeds,
+                    "cost": position_entry_cost, "pnl": net_pnl, "reason": sig["reason"],
                 })
                 self.position = 0
 
-            elif sig["type"] == "BUY" and self.position > 0:
-                loss_pct = (sig["price"] - position_entry_price) / position_entry_price
-                if loss_pct <= -0.03:
-                    proceeds = self.position * sig["price"] * (1 - FEE_RATE)
-                    net_pnl = proceeds - position_entry_cost
-                    self.capital += proceeds
-                    self.trades.append({
-                        "action": "SELL",
-                        "time": sig["time"],
-                        "price": sig["price"],
-                        "shares": self.position,
-                        "proceeds": proceeds,
-                        "cost": position_entry_cost,
-                        "pnl": net_pnl,
-                        "reason": "止损(-3%)",
-                    })
-                    self.position = 0
+            elif sig["type"] == "COVER" and self.position < 0:
+                cost = abs(self.position) * sig["price"] * (1 + FEE_RATE)
+                net_pnl = position_entry_cost - cost
+                self.capital -= cost
+                self.trades.append({
+                    "action": "COVER", "time": sig["time"], "price": sig["price"],
+                    "shares": abs(self.position), "cost": cost,
+                    "proceeds": position_entry_cost, "pnl": net_pnl, "reason": sig["reason"],
+                })
+                self.position = 0
 
-        if self.position > 0 and self.klines:
+        if self.position != 0 and self.klines:
             final_price = self.klines[-1]["close"]
-            proceeds = self.position * final_price * (1 - FEE_RATE)
-            net_pnl = proceeds - position_entry_cost
-            self.trades.append({
-                "action": "SELL",
-                "time": datetime.fromtimestamp(self.klines[-1]["timestamp"] / 1000),
-                "price": final_price,
-                "shares": self.position,
-                "proceeds": proceeds,
-                "cost": position_entry_cost,
-                "pnl": net_pnl,
-                "reason": "回测结束，平仓",
-            })
-            self.capital += proceeds
+            if self.position > 0:
+                proceeds = self.position * final_price * (1 - FEE_RATE)
+                net_pnl = proceeds - position_entry_cost
+                self.trades.append({
+                    "action": "SELL", "time": datetime.fromtimestamp(self.klines[-1]["timestamp"] / 1000),
+                    "price": final_price, "shares": self.position, "proceeds": proceeds,
+                    "cost": position_entry_cost, "pnl": net_pnl, "reason": "回测结束，平仓",
+                })
+                self.capital += proceeds
+            else:
+                cost = abs(self.position) * final_price * (1 + FEE_RATE)
+                net_pnl = position_entry_cost - cost
+                self.trades.append({
+                    "action": "COVER", "time": datetime.fromtimestamp(self.klines[-1]["timestamp"] / 1000),
+                    "price": final_price, "shares": abs(self.position), "cost": cost,
+                    "proceeds": position_entry_cost, "pnl": net_pnl, "reason": "回测结束，平仓",
+                })
+                self.capital -= cost
             self.position = 0
 
         return self.calculate_metrics()
@@ -371,6 +374,7 @@ class Backtester:
     def calculate_metrics(self) -> Dict:
         if not self.trades:
             return self._empty_result()
+
         equity_curve = []
         equity = self.initial_capital
         peak = equity
@@ -378,13 +382,13 @@ class Backtester:
         wins, losses = 0, 0
         total_win, total_loss = 0, 0
         returns = []
+        longs, shorts = 0, 0
+        long_wins, short_wins = 0, 0
 
         for trade in self.trades:
-            if trade["action"] == "BUY":
-                equity -= trade.get("cost", 0)
-            else:
-                equity += trade["proceeds"]
+            if trade["action"] in ("SELL", "COVER"):
                 net_pnl = trade.get("pnl", 0)
+                equity += net_pnl
                 returns.append(net_pnl / self.initial_capital)
                 if net_pnl > 0:
                     wins += 1
@@ -392,6 +396,16 @@ class Backtester:
                 else:
                     losses += 1
                     total_loss += abs(net_pnl)
+
+                if trade["action"] == "SELL":
+                    longs += 1
+                    if net_pnl > 0:
+                        long_wins += 1
+                else:
+                    shorts += 1
+                    if net_pnl > 0:
+                        short_wins += 1
+
             peak = max(peak, equity)
             dd = (peak - equity) / peak if peak > 0 else 0
             max_dd = max(max_dd, dd)
@@ -411,6 +425,8 @@ class Backtester:
             "win_rate": win_rate, "profit_factor": profit_factor,
             "max_drawdown": max_dd * 100, "sharpe_ratio": sharpe,
             "initial_capital": self.initial_capital, "final_capital": equity,
+            "long_trades": longs, "long_wins": long_wins,
+            "short_trades": shorts, "short_wins": short_wins,
             "trades": self.trades, "equity_curve": equity_curve,
         }
 
@@ -426,6 +442,9 @@ class Backtester:
         print(f"最大回撤: {results['max_drawdown']:.2f}%")
         print(f"夏普比率: {results['sharpe_ratio']:.2f}")
         print("-" * 60)
+        print(f"做多交易: {results.get('long_trades', 0)} (胜率: {results.get('long_wins', 0)/max(results.get('long_trades', 1),1)*100:.0f}%)")
+        print(f"做空交易: {results.get('short_trades', 0)} (胜率: {results.get('short_wins', 0)/max(results.get('short_trades', 1),1)*100:.0f}%)")
+        print("-" * 60)
         print(f"初始资金: ${results['initial_capital']:,.2f}")
         print(f"最终资金: ${results['final_capital']:,.2f}")
         print(f"总收益率: {results['total_return']:+.2f}%")
@@ -434,7 +453,8 @@ class Backtester:
         if results['trades']:
             print("\n📋 最近10笔交易:")
             for t in results['trades'][-10:]:
-                action = "买入" if t['action'] == 'BUY' else "卖出"
+                action_map = {"BUY": "买入", "SELL": "卖出", "SHORT": "做空", "COVER": "平空"}
+                action = action_map.get(t['action'], t['action'])
                 pnl_str = f" | 盈亏: {t.get('pnl', 0):+.2f}" if 'pnl' in t else ""
                 print(f"  {t['time'].strftime('%Y-%m-%d %H:%M')} | {action} | ${t['price']:,.2f} | {t['reason']}{pnl_str}")
 
