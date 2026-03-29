@@ -2,3 +2,4 @@ websockets
 aiohttp
 python-dotenv
 numpy
+flask

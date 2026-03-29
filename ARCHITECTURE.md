@@ -212,6 +212,9 @@ wss://stream.binance.com:9443/stream?streams=
 ```
 scan_btc/
 ├── monitor.py          # 主程序
+├── web_ui.py          # Flask Web 服务
+├── templates/          # HTML 模板
+│   └── index.html     # Web UI 页面
 ├── .env                # 本地配置 (已 gitignore)
 ├── .env.example        # 配置模板
 ├── requirements.txt    # 依赖
@@ -227,6 +230,7 @@ aiohttp>=3.8.0
 websockets>=10.0
 numpy>=1.21.0
 python-dotenv>=0.19.0
+flask>=2.0.0
 ```
 
 ## 使用方式
@@ -239,18 +243,40 @@ pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env 填入 Telegram token
 
+# 启动 Web UI (可选)
+# 编辑 .env 设置 ENABLE_WEB_UI=true
+
 # 启动 (需要先加载代理)
 source /usr/local/proxy1.sh
 ./start.sh
+
+# 访问 Web UI (如果 ENABLE_WEB_UI=true)
+# http://localhost:5000
 ```
+
+## Web UI
+
+当 `ENABLE_WEB_UI=true` 时，系统启动 Flask 服务器提供可视化界面：
+
+| 路由 | 说明 |
+|------|------|
+| `/` | Web UI 主页面 |
+| `/api/status` | 获取当前监控状态 (JSON) |
+| `/api/stream` | SSE 实时推送更新 |
+
+Web UI 显示内容：
+- 💰 价格监控（多币种切换）
+- 📈 技术指标 (RSI, MACD, 布林带, ATR, 量比)
+- 🌡️ 市场情绪 (资金费率, 恐惧贪婪, 多空比)
+- 🚨 实时信号列表
 
 ## 扩展方向
 
-1. **更多时间周期**: 15m, 4h, 1w
-2. **更多市场情绪数据**: 交易所净流量、大户转账、交易所余额
-3. **策略组合**: 多周期共振、多指标组合
-4. **回测模块**: 基于历史数据的策略验证
-5. **Web UI**: 可视化监控面板
+1. ~~**Web UI**: 可视化监控面板~~ ✅ 已实现
+2. **更多时间周期**: 15m, 4h, 1w
+3. **更多市场情绪数据**: 交易所净流量、大户转账、交易所余额
+4. **策略组合**: 多周期共振、多指标组合
+5. **回测模块**: 基于历史数据的策略验证
 
 ---
 
@@ -275,6 +301,12 @@ source /usr/local/proxy1.sh
 1. 在 `check_market_sentiment()` 中添加 fetch 函数
 2. 使用 `market_sentiment[symbol]` 缓存数据
 3. 设置合理的阈值和告警条件
+
+### 添加 Web UI 显示
+
+1. 在 `web_ui.py` 的 `update_shared_state()` 中添加数据
+2. 在 `templates/index.html` 中添加 UI 元素
+3. 使用 SSE `/api/stream` 实时推送更新
 
 ### 添加新时间周期
 
@@ -306,6 +338,7 @@ source /usr/local/proxy1.sh
 | v1.1 | 2026-03-29 | 添加 MACD、布林带、ATR |
 | v1.2 | 2026-03-29 | 添加多级别买卖信号 |
 | v1.3 | 2026-03-29 | 添加市场情绪数据 (Funding/F&G/L&S) |
+| v1.4 | 2026-03-29 | 添加 Web UI 可视化界面 |
 
 ---
 

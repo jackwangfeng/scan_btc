@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTC 量化监控</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+        .header {
+            background: #16213e;
+            padding: 15px 30px;
+            border-bottom: 1px solid #0f3460;
+        }
+        .header h1 { font-size: 1.5rem; color: #00d4ff; }
+        .container { display: flex; flex-wrap: wrap; padding: 20px; gap: 20px; }
+        .card {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            min-width: 300px;
+            flex: 1;
+        }
+        .card h2 {
+            font-size: 1rem;
+            color: #888;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #0f3460;
+            padding-bottom: 10px;
+        }
+        .price {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #00d4ff;
+        }
+        .price-up { color: #00ff88; }
+        .price-down { color: #ff4757; }
+        .indicator {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #0f3460;
+        }
+        .indicator-label { color: #888; }
+        .indicator-value { font-weight: bold; }
+        .signal-list { max-height: 300px; overflow-y: auto; }
+        .signal-item {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+        .signal-buy { background: rgba(0, 255, 136, 0.1); border-left: 3px solid #00ff88; }
+        .signal-sell { background: rgba(255, 71, 87, 0.1); border-left: 3px solid #ff4757; }
+        .signal-watch { background: rgba(255, 193, 7, 0.1); border-left: 3px solid #ffc107; }
+        .signal-market { background: rgba(0, 212, 255, 0.1); border-left: 3px solid #00d4ff; }
+        .sentiment-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .sentiment-item { text-align: center; padding: 10px; background: #0f3460; border-radius: 8px; }
+        .sentiment-value { font-size: 1.5rem; font-weight: bold; }
+        .sentiment-label { font-size: 0.75rem; color: #888; margin-top: 5px; }
+        .fear { color: #ff4757; }
+        .greed { color: #00ff88; }
+        .neutral { color: #ffc107; }
+        .timestamp { font-size: 0.75rem; color: #666; text-align: right; margin-top: 10px; }
+        .symbol-tabs { display: flex; gap: 10px; margin-bottom: 15px; }
+        .symbol-tab {
+            padding: 8px 16px;
+            background: #0f3460;
+            border-radius: 6px;
+            cursor: pointer;
+            border: none;
+            color: #888;
+        }
+        .symbol-tab.active { background: #00d4ff; color: #1a1a2e; }
+        .refresh-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.7rem;
+            margin-left: 10px;
+        }
+        .badge-success { background: #00ff88; color: #1a1a2e; }
+        .badge-danger { background: #ff4757; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 BTC 量化监控系统</h1>
+    </div>
+    <div class="container">
+        <div class="card">
+            <h2>💰 价格监控</h2>
+            <div class="symbol-tabs" id="symbolTabs"></div>
+            <div id="priceDisplay">
+                <div class="price">--</div>
+                <div id="priceChange" style="color: #888; margin-top: 5px;">--</div>
+            </div>
+        </div>
+        <div class="card">
+            <h2>📈 技术指标</h2>
+            <div id="indicators">
+                <div class="indicator">
+                    <span class="indicator-label">RSI (14)</span>
+                    <span class="indicator-value" id="rsi">--</span>
+                </div>
+                <div class="indicator">
+                    <span class="indicator-label">MACD</span>
+                    <span class="indicator-value" id="macd">--</span>
+                </div>
+                <div class="indicator">
+                    <span class="indicator-label">布林带</span>
+                    <span class="indicator-value" id="bb">--</span>
+                </div>
+                <div class="indicator">
+                    <span class="indicator-label">ATR</span>
+                    <span class="indicator-value" id="atr">--</span>
+                </div>
+                <div class="indicator">
+                    <span class="indicator-label">量比</span>
+                    <span class="indicator-value" id="volRatio">--</span>
+                </div>
+            </div>
+        </div>
+        <div class="card">
+            <h2>🌡️ 市场情绪</h2>
+            <div class="sentiment-grid">
+                <div class="sentiment-item">
+                    <div class="sentiment-value" id="fundingRate">--</div>
+                    <div class="sentiment-label">资金费率</div>
+                </div>
+                <div class="sentiment-item">
+                    <div class="sentiment-value" id="fearGreed">--</div>
+                    <div class="sentiment-label">恐惧贪婪</div>
+                </div>
+                <div class="sentiment-item">
+                    <div class="sentiment-value" id="longShort">--</div>
+                    <div class="sentiment-label">多空比</div>
+                </div>
+            </div>
+        </div>
+        <div class="card" style="flex: 2; min-width: 500px;">
+            <h2>🚨 实时信号<span class="refresh-badge badge-success" id="signalCount">0</span></h2>
+            <div class="signal-list" id="signalList">
+                <div style="color: #666; text-align: center; padding: 30px;">暂无信号</div>
+            </div>
+        </div>
+    </div>
+    <div class="timestamp">最后更新: <span id="lastUpdate">--</span></div>
+
+    <script>
+        let currentSymbol = 'BTCUSDT';
+        let symbols = [];
+        let lastSignalCount = 0;
+
+        function formatNumber(num, decimals = 2) {
+            if (num === null || num === undefined || isNaN(num)) return '--';
+            return Number(num).toFixed(decimals);
+        }
+
+        function formatPrice(price) {
+            if (!price) return '--';
+            return Number(price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function getSignalClass(title) {
+            if (title.includes('买入') || title.includes('多')) return 'signal-buy';
+            if (title.includes('卖出') || title.includes('空') || title.includes('谨慎')) return 'signal-sell';
+            if (title.includes('观望')) return 'signal-watch';
+            return 'signal-market';
+        }
+
+        function getSentimentClass(value, type) {
+            if (type === 'fearGreed') {
+                if (value <= 25) return 'fear';
+                if (value >= 75) return 'greed';
+                return 'neutral';
+            }
+            return '';
+        }
+
+        function updateUI(data) {
+            if (!data.prices) return;
+
+            symbols = Object.keys(data.prices);
+
+            if (!symbols.includes(currentSymbol)) {
+                currentSymbol = symbols[0] || 'BTCUSDT';
+            }
+
+            renderSymbolTabs();
+            renderPrice(data.prices[currentSymbol]);
+            renderIndicators(data.indicators[currentSymbol]);
+            renderSentiment(data.sentiment);
+            renderSignals(data.recent_signals);
+            updateTimestamp(data.last_update);
+        }
+
+        function renderSymbolTabs() {
+            const tabs = document.getElementById('symbolTabs');
+            tabs.innerHTML = symbols.map(sym => `
+                <button class="symbol-tab ${sym === currentSymbol ? 'active' : ''}"
+                        onclick="switchSymbol('${sym}')">${sym}</button>
+            `).join('');
+        }
+
+        function switchSymbol(sym) {
+            currentSymbol = sym;
+            renderSymbolTabs();
+            const data = window.currentData;
+            if (data) {
+                renderPrice(data.prices ? data.prices[sym] : null);
+                renderIndicators(data.indicators ? data.indicators[sym] : null);
+            }
+        }
+
+        function renderPrice(priceData) {
+            if (!priceData) return;
+            const priceEl = document.querySelector('.price');
+            priceEl.textContent = '$' + formatPrice(priceData.price);
+        }
+
+        function renderIndicators(indData) {
+            if (!indData) return;
+            document.getElementById('rsi').textContent = formatNumber(indData.rsi);
+            document.getElementById('macd').textContent = indData.macd ? formatNumber(indData.macd) + ' / ' + formatNumber(indData.macd_signal) : '--';
+            document.getElementById('bb').textContent = indData.bb ? formatNumber(indData.bb_upper) + ' / ' + formatNumber(indData.bb_lower) : '--';
+            document.getElementById('atr').textContent = formatNumber(indData.atr);
+            document.getElementById('volRatio').textContent = formatNumber(indData.vol_ratio, 1) + 'x';
+        }
+
+        function renderSentiment(sentiment) {
+            if (!sentiment || !sentiment[currentSymbol]) {
+                document.getElementById('fundingRate').textContent = '--';
+                document.getElementById('fearGreed').textContent = '--';
+                document.getElementById('longShort').textContent = '--';
+                return;
+            }
+            const s = sentiment[currentSymbol];
+            const fr = document.getElementById('fundingRate');
+            fr.textContent = formatNumber(s.funding_rate, 4) + '%';
+            fr.style.color = s.funding_rate > 0 ? '#ff4757' : '#00ff88';
+
+            const fg = document.getElementById('fearGreed');
+            fg.textContent = s.fear_greed || '--';
+            fg.className = 'sentiment-value ' + getSentimentClass(s.fear_greed, 'fearGreed');
+
+            const ls = document.getElementById('longShort');
+            ls.textContent = formatNumber(s.long_short, 2) + 'x';
+        }
+
+        function renderSignals(signals) {
+            const list = document.getElementById('signalList');
+            if (!signals || signals.length === 0) {
+                list.innerHTML = '<div style="color: #666; text-align: center; padding: 30px;">暂无信号</div>';
+                document.getElementById('signalCount').textContent = '0';
+                return;
+            }
+
+            document.getElementById('signalCount').textContent = signals.length;
+            document.getElementById('signalCount').className = 'refresh-badge badge-danger';
+
+            list.innerHTML = signals.map(sig => `
+                <div class="signal-item ${getSignalClass(sig.title)}">
+                    <strong>${sig.title}</strong><br>
+                    <span style="color: #888; font-size: 0.8rem;">${sig.desc}</span><br>
+                    <span style="color: #666; font-size: 0.7rem;">${sig.time || ''}</span>
+                </div>
+            `).join('');
+        }
+
+        function updateTimestamp(ts) {
+            if (!ts) return;
+            const date = new Date(ts * 1000);
+            document.getElementById('lastUpdate').textContent = date.toLocaleTimeString();
+        }
+
+        function connectSSE() {
+            const source = new EventSource('/api/stream');
+            source.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                window.currentData = data;
+                updateUI(data);
+            };
+            source.onerror = function() {
+                source.close();
+                setTimeout(connectSSE, 5000);
+            };
+        }
+
+        document.addEventListener('DOMContentLoaded', connectSSE);
+    </script>
+</body>
+</html>

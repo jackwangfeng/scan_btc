@@ -616,6 +616,17 @@ async def monitor_prices():
                             sentiment_signals = await check_market_sentiment(sym, now)
                             if sentiment_signals:
                                 await handle_signals(sym, sentiment_signals, current_price, now)
+                            if ENABLE_WEB_UI:
+                                from web_ui import update_shared_state
+                                sentiment_data = market_sentiment.get(sym, {})
+                                update_shared_state(
+                                    sentiment={sym: sentiment_data},
+                                    signal={
+                                        "title": f"[{sym}] 市场情绪",
+                                        "desc": f"F&G: {sentiment_data.get('fear_greed', '--')} | 多空: {sentiment_data.get('long_short', '--')}x",
+                                        "time": now.strftime('%H:%M:%S')
+                                    }
+                                )
                         last_sentiment_check = now
 
                     if symbol == MONITOR_SYMBOLS[0] and tf == "1m":
@@ -623,6 +634,28 @@ async def monitor_prices():
                         rsi = calculate_rsi(closes, RSI_PERIOD) if len(closes) > RSI_PERIOD else 0
                         vol_ratio = volume / np.mean(tf_data.volumes) if tf_data.volumes else 1
                         print(f"\r[监控] {symbol} | Price: {current_price:<10} | RSI: {rsi:>5.2f} | 量比: {vol_ratio:>4.1f}x", end="", flush=True)
+
+                        if ENABLE_WEB_UI:
+                            from web_ui import update_shared_state
+                            tf_1m = monitors[symbol].timeframes.get("1m")
+                            if tf_1m:
+                                closes_arr = np.array(list(tf_1m.closes))
+                                macd_val, macd_sig, _ = calculate_macd(closes_arr, MACD_FAST, MACD_SLOW, MACD_SIGNAL) if len(closes_arr) >= MACD_SLOW else (None, None, None)
+                                bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(closes_arr, BB_PERIOD, BB_STD) if len(closes_arr) >= BB_PERIOD else (None, None, None)
+                                atr_val = calculate_atr(tf_1m.highs, tf_1m.lows, tf_1m.closes, ATR_PERIOD) if len(tf_1m.highs) >= ATR_PERIOD else None
+
+                                update_shared_state(
+                                    prices={symbol: {"price": current_price, "rsi": rsi}},
+                                    indicators={symbol: {
+                                        "rsi": rsi,
+                                        "macd": macd_val,
+                                        "macd_signal": macd_sig,
+                                        "bb_upper": bb_upper,
+                                        "bb_lower": bb_lower,
+                                        "atr": atr_val,
+                                        "vol_ratio": vol_ratio
+                                    }}
+                                )
 
         except websockets.ConnectionClosed:
             logger.error("WebSocket closed, retrying...")
@@ -633,6 +666,17 @@ async def monitor_prices():
 
 
 if __name__ == "__main__":
+    import threading
+    ENABLE_WEB_UI = os.getenv("ENABLE_WEB_UI", "false").lower() == "true"
+    WEB_UI_PORT = int(os.getenv("WEB_UI_PORT", "5000"))
+
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "your_bot_token_here":
         print("--- [注意] 未配置 Telegram，仅本地监控模式 ---")
+
+    if ENABLE_WEB_UI:
+        from web_ui import run_server, update_shared_state
+        web_thread = threading.Thread(target=run_server, kwargs={"port": WEB_UI_PORT}, daemon=True)
+        web_thread.start()
+        print(f"--- Web UI 已启动: http://0.0.0.0:{WEB_UI_PORT} ---")
+
     asyncio.run(monitor_prices())
