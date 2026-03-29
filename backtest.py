@@ -237,31 +237,31 @@ class Backtester:
             reason = ""
 
             if self.position == 0:
-                if rsi >= RSI_OVERBOUGHT and vol_ratio >= 1.2 and not is_green:
+                if rsi >= RSI_OVERBOUGHT - 10 and vol_ratio >= 1.2 and not is_green:
                     signal_type = "SHORT"
                     reason = f"做空: RSI({rsi:.1f})+量({vol_ratio:.1f}x)"
-                elif rsi <= RSI_OVERSOLD and vol_ratio >= 1.2 and is_green:
+                elif rsi <= RSI_OVERSOLD + 10 and vol_ratio >= 1.2 and is_green:
                     signal_type = "BUY"
                     reason = f"做多: RSI({rsi:.1f})+量({vol_ratio:.1f}x)"
 
             elif self.position > 0:
                 loss_pct = (current_price - position_entry_price) / position_entry_price
-                if loss_pct <= -0.02:
+                if loss_pct <= -0.015:
                     signal_type = "SELL"
-                    reason = "止损(-2%)"
-                elif is_green and vol_ratio >= 1.3 and rsi >= 55:
+                    reason = "止损(-1.5%)"
+                elif rsi >= 65 and vol_ratio >= 1.2:
                     signal_type = "SELL"
                     reason = f"止盈: RSI({rsi:.1f})+量"
 
             elif self.position < 0:
                 profit_pct = (position_entry_price - current_price) / position_entry_price
-                if profit_pct >= 0.02:
+                if profit_pct >= 0.015:
                     signal_type = "COVER"
-                    reason = "止盈(+2%)"
-                elif profit_pct <= -0.02:
+                    reason = "止盈(+1.5%)"
+                elif profit_pct <= -0.015:
                     signal_type = "COVER"
-                    reason = "止损(-2%)"
-                elif is_green and rsi <= 45:
+                    reason = "止损(-1.5%)"
+                elif rsi <= 35 and is_green:
                     signal_type = "COVER"
                     reason = "平空反手做多"
 
@@ -275,10 +275,17 @@ class Backtester:
                     "trend": "up" if is_uptrend else ("down" if is_downtrend else "sideways"),
                 })
                 if signal_type == "BUY":
+                    self.position = 1
                     position_entry_price = current_price
                 elif signal_type == "SHORT":
+                    self.position = -1
                     position_entry_price = current_price
+                elif signal_type == "SELL":
+                    self.position = 0
+                elif signal_type == "COVER":
+                    self.position = 0
 
+        self.position = 0
         return signals
 
     def run(self, signals: List[Dict]) -> Dict:
