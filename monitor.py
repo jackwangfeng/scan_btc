@@ -629,7 +629,7 @@ async def monitor_prices():
                                 )
                         last_sentiment_check = now
 
-                    if symbol == MONITOR_SYMBOLS[0] and tf == "1m":
+                    if tf == "1m":
                         closes = np.array(list(tf_data.closes))
                         rsi = calculate_rsi(closes, RSI_PERIOD) if len(closes) > RSI_PERIOD else 0
                         vol_ratio = volume / np.mean(tf_data.volumes) if tf_data.volumes else 1
