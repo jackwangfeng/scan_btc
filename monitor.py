@@ -301,17 +301,59 @@ def evaluate_strategies(symbol: str, tf: str, tf_data: TimeframeData,
         is_green = current_price > open_price
         is_red = current_price < open_price
 
-        if rsi <= (RSI_OVERSOLD + 5) and is_vol_spike and is_green:
+        if len(closes) >= BB_PERIOD:
+            bb_upper, bb_middle, bb_lower = calculate_bollinger_bands(closes, BB_PERIOD, BB_STD)
+        else:
+            bb_upper, bb_middle, bb_lower = None, None, None
+
+        if rsi <= RSI_OVERSOLD and is_vol_spike and is_green:
             signals.append({
                 "category": "SIGNAL",
-                "title": f"🟢 多因子买入共振 {timeframe_suffix}",
-                "desc": f"RSI: `{rsi:.2f}` | 量比: `{volume/avg_vol_past:.1f}x`"
+                "title": f"🟢🟢 强烈买入信号 {timeframe_suffix}",
+                "desc": f"RSI超卖+放量阳线 | RSI: `{rsi:.1f}` | 量比: `{volume/avg_vol_past:.1f}x`"
             })
-        elif rsi >= (RSI_OVERBOUGHT - 5) and is_vol_spike and is_red:
+        elif rsi <= RSI_OVERSOLD and is_vol_spike:
             signals.append({
                 "category": "SIGNAL",
-                "title": f"🔴 多因子卖出共振 {timeframe_suffix}",
-                "desc": f"RSI: `{rsi:.2f}` | 量比: `{volume/avg_vol_past:.1f}x`"
+                "title": f"🟢 买入关注 {timeframe_suffix}",
+                "desc": f"RSI超卖+放量 | RSI: `{rsi:.1f}` | 量比: `{volume/avg_vol_past:.1f}x`"
+            })
+        elif rsi <= RSI_OVERSOLD + 5:
+            signals.append({
+                "category": "SIGNAL",
+                "title": f"🟡 观望提醒 {timeframe_suffix}",
+                "desc": f"RSI接近超卖 | RSI: `{rsi:.1f}`"
+            })
+        elif bb_lower and current_price <= bb_lower and rsi <= 45:
+            signals.append({
+                "category": "SIGNAL",
+                "title": f"🟢 布林下轨支撑 {timeframe_suffix}",
+                "desc": f"价格触布林下轨 | 下轨: `{bb_lower:.1f}` | RSI: `{rsi:.1f}`"
+            })
+
+        if rsi >= RSI_OVERBOUGHT and is_vol_spike and is_red:
+            signals.append({
+                "category": "SIGNAL",
+                "title": f"🔴🔴 强烈卖出信号 {timeframe_suffix}",
+                "desc": f"RSI超买+放量阴线 | RSI: `{rsi:.1f}` | 量比: `{volume/avg_vol_past:.1f}x`"
+            })
+        elif rsi >= RSI_OVERBOUGHT and is_vol_spike:
+            signals.append({
+                "category": "SIGNAL",
+                "title": f"🔴 卖出关注 {timeframe_suffix}",
+                "desc": f"RSI超买+放量 | RSI: `{rsi:.1f}` | 量比: `{volume/avg_vol_past:.1f}x`"
+            })
+        elif rsi >= RSI_OVERBOUGHT - 5:
+            signals.append({
+                "category": "SIGNAL",
+                "title": f"🟡 谨慎提醒 {timeframe_suffix}",
+                "desc": f"RSI接近超买 | RSI: `{rsi:.1f}`"
+            })
+        elif bb_upper and current_price >= bb_upper and rsi >= 55:
+            signals.append({
+                "category": "SIGNAL",
+                "title": f"🔴 布林上轨压力 {timeframe_suffix}",
+                "desc": f"价格触布林上轨 | 上轨: `{bb_upper:.1f}` | RSI: `{rsi:.1f}`"
             })
 
     return signals
