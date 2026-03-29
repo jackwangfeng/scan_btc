@@ -49,6 +49,15 @@ ENABLE_5M = os.getenv("ENABLE_5M", "true").lower() == "true"
 ENABLE_1H = os.getenv("ENABLE_1H", "true").lower() == "true"
 ENABLE_1D = os.getenv("ENABLE_1D", "true").lower() == "true"
 
+ENABLE_FUNDING_RATE = os.getenv("ENABLE_FUNDING_RATE", "true").lower() == "true"
+ENABLE_FEAR_GREED = os.getenv("ENABLE_FEAR_GREED", "true").lower() == "true"
+ENABLE_LONG_SHORT = os.getenv("ENABLE_LONG_SHORT", "true").lower() == "true"
+
+FUNDING_RATE_THRESHOLD = float(os.getenv("FUNDING_RATE_THRESHOLD", "0.01"))
+FEAR_GREED_BUY_THRESHOLD = int(os.getenv("FEAR_GREED_BUY_THRESHOLD", "25"))
+FEAR_GREED_SELL_THRESHOLD = int(os.getenv("FEAR_GREED_SELL_THRESHOLD", "75"))
+LONG_SHORT_THRESHOLD = float(os.getenv("LONG_SHORT_THRESHOLD", "2.0"))
+
 TIMEFRAMES = []
 if ENABLE_1M: TIMEFRAMES.append("1m")
 if ENABLE_5M: TIMEFRAMES.append("5m")
@@ -434,6 +443,108 @@ async def preload_historical_data(symbol: str, tf: str, tf_data: TimeframeData, 
         logger.warning(f"Could not preload {tf} data for {symbol}, will accumulate from scratch")
 
 
+market_sentiment: Dict[str, dict] = {}
+
+
+async def fetch_funding_rate(symbol: str) -> Optional[float]:
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}&limit=1"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, proxy=PROXY_URL, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return float(data[0]["fundingRate"]) * 100
+    except Exception as e:
+        logger.debug(f"Funding rate fetch error: {e}")
+    return None
+
+
+async def fetch_fear_greed_index() -> Optional[int]:
+    try:
+        url = "https://api.alternative.me/fng/?limit=1"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, proxy=PROXY_URL, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return int(data["data"][0]["value"])
+    except Exception as e:
+        logger.debug(f"Fear&Greed fetch error: {e}")
+    return None
+
+
+async def fetch_long_short_ratio(symbol: str) -> Optional[float]:
+    try:
+        url = f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={symbol}&period=1h&limit=1"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, proxy=PROXY_URL, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    long_ratio = float(data[0]["longAccount"])
+                    short_ratio = float(data[0]["shortAccount"])
+                    return long_ratio / short_ratio if short_ratio > 0 else 1.0
+    except Exception as e:
+        logger.debug(f"Long/Short ratio fetch error: {e}")
+    return None
+
+
+async def check_market_sentiment(symbol: str, now: datetime) -> List[dict]:
+    signals = []
+
+    if ENABLE_FUNDING_RATE:
+        funding_rate = await fetch_funding_rate(symbol)
+        if funding_rate is not None:
+            market_sentiment[symbol] = market_sentiment.get(symbol, {})
+            market_sentiment[symbol]["funding_rate"] = funding_rate
+
+            if abs(funding_rate) > FUNDING_RATE_THRESHOLD * 100:
+                direction = "🟢 多头" if funding_rate > 0 else "🔴 空头"
+                signals.append({
+                    "category": "MARKET",
+                    "title": f"资金费率异常 ({direction})",
+                    "desc": f"费率: `{funding_rate:+.4f}%` (阈值: ±{FUNDING_RATE_THRESHOLD*100:.2f}%)"
+                })
+
+    if ENABLE_FEAR_GREED:
+        fgi = await fetch_fear_greed_index()
+        if fgi is not None:
+            market_sentiment[symbol] = market_sentiment.get(symbol, {})
+            market_sentiment[symbol]["fear_greed"] = fgi
+
+            if fgi <= FEAR_GREED_BUY_THRESHOLD:
+                signals.append({
+                    "category": "MARKET",
+                    "title": "😱 极度恐惧",
+                    "desc": f"恐惧贪婪指数: `{fgi}` (买入机会区域)"
+                })
+            elif fgi >= FEAR_GREED_SELL_THRESHOLD:
+                signals.append({
+                    "category": "MARKET",
+                    "title": "🤑 极度贪婪",
+                    "desc": f"恐惧贪婪指数: `{fgi}` (注意风险)"
+                })
+
+    if ENABLE_LONG_SHORT:
+        ls_ratio = await fetch_long_short_ratio(symbol)
+        if ls_ratio is not None:
+            market_sentiment[symbol] = market_sentiment.get(symbol, {})
+            market_sentiment[symbol]["long_short"] = ls_ratio
+
+            if ls_ratio >= LONG_SHORT_THRESHOLD:
+                signals.append({
+                    "category": "MARKET",
+                    "title": "📊 多空人数比极端",
+                    "desc": f"多空比: `{ls_ratio:.2f}x` (偏多，风险积累)"
+                })
+            elif ls_ratio <= 1 / LONG_SHORT_THRESHOLD:
+                signals.append({
+                    "category": "MARKET",
+                    "title": "📊 多空人数比极端",
+                    "desc": f"多空比: `{ls_ratio:.2f}x` (偏空，可能见底)"
+                })
+
+    return signals
+
+
 async def monitor_prices():
     if not TIMEFRAMES:
         logger.error("No timeframes enabled!")
@@ -462,6 +573,8 @@ async def monitor_prices():
         try:
             async with websockets.connect(url, ping_timeout=30) as ws:
                 logger.info("WebSocket connected")
+                sentiment_check_interval = 300
+                last_sentiment_check = datetime.min
                 while True:
                     message = await ws.recv()
                     data = json.loads(message)
@@ -497,6 +610,13 @@ async def monitor_prices():
 
                     if signals:
                         await handle_signals(symbol, signals, current_price, now)
+
+                    if (now - last_sentiment_check).total_seconds() >= sentiment_check_interval:
+                        for sym in MONITOR_SYMBOLS:
+                            sentiment_signals = await check_market_sentiment(sym, now)
+                            if sentiment_signals:
+                                await handle_signals(sym, sentiment_signals, current_price, now)
+                        last_sentiment_check = now
 
                     if symbol == MONITOR_SYMBOLS[0] and tf == "1m":
                         closes = np.array(list(tf_data.closes))
