@@ -211,16 +211,17 @@ wss://stream.binance.com:9443/stream?streams=
 
 ```
 scan_btc/
-├── monitor.py          # 主程序
-├── web_ui.py          # Flask Web 服务
-├── templates/          # HTML 模板
-│   └── index.html     # Web UI 页面
-├── .env                # 本地配置 (已 gitignore)
+├── monitor.py          # 主程序 (实时监控)
+├── web_ui.py           # Flask Web 服务
+├── backtest.py         # 回测模块
+├── templates/           # HTML 模板
+│   └── index.html      # Web UI 页面
+├── .env                 # 本地配置 (已 gitignore)
 ├── .env.example        # 配置模板
-├── requirements.txt    # 依赖
-├── start.sh            # 启动脚本
-├── stop.sh             # 停止脚本
-└── status.sh           # 状态脚本
+├── requirements.txt     # 依赖
+├── start.sh             # 启动脚本
+├── stop.sh              # 停止脚本
+└── status.sh            # 状态脚本
 ```
 
 ## 依赖
@@ -273,10 +274,11 @@ Web UI 显示内容：
 ## 扩展方向
 
 1. ~~**Web UI**: 可视化监控面板~~ ✅ 已实现
-2. **更多时间周期**: 15m, 4h, 1w
-3. **更多市场情绪数据**: 交易所净流量、大户转账、交易所余额
-4. **策略组合**: 多周期共振、多指标组合
-5. **回测模块**: 基于历史数据的策略验证
+2. ~~**回测模块**: 基于历史数据的策略验证~~ ✅ 已实现
+3. **更多时间周期**: 15m, 4h, 1w
+4. **更多市场情绪数据**: 交易所净流量、大户转账、交易所余额
+5. **策略组合**: 多周期共振、多指标组合
+6. **LLM 信号解释**: AI 分析交易信号
 
 ---
 
@@ -339,6 +341,7 @@ Web UI 显示内容：
 | v1.2 | 2026-03-29 | 添加多级别买卖信号 |
 | v1.3 | 2026-03-29 | 添加市场情绪数据 (Funding/F&G/L&S) |
 | v1.4 | 2026-03-29 | 添加 Web UI 可视化界面 |
+| v1.5 | 2026-03-29 | 添加回测模块 |
 
 ---
 
